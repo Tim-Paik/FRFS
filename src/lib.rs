@@ -1,3 +1,45 @@
+//! # FRFS: File-based Read-only File System
+//! 
+//! FRFS allows you to pack tons of small files into a single file,
+//! and provides the ability to read randomly, avoid excessively
+//! long paths, and improve copy efficiency.
+//! Recommended for small file packaging.
+//!
+//! Most APIs are similar to std::fs, but read only.
+//! 
+//! The difference from `std::fs` is that the ReadDir returned by
+//! `read_dir` has the `into_iter()` method instead of `iter()`.
+//! 
+//! ## Main Function
+//! 
+//! [load]: Load a FRFS file.
+//! 
+//! [load_from_embed_file]: Load a FRFS file from frfs::File.
+//! 
+//! [pack]: Pack a folder into a FRFS file.
+//! 
+//! ## Example
+//!
+//! ```rust
+//! fn main() -> std::io::Result<()> {
+//!     // Pack a frfs file
+//!     frfs::pack("src", "./src.frfs")?;
+//!     // then open it
+//!     let fs = frfs::load("./src.frfs")?;
+//!     // iterating over and printing what's inside is as easy as using std::fs
+//!     for entry in fs.read_dir("/")? {
+//!         let entry = entry?;
+//!         if entry.metadata()?.is_file() {
+//!             println!("{:?}", fs.open(entry.path())?);
+//!         } else if entry.metadata()?.is_dir() {
+//!             println!("Dir {{ path: {:?} }}", entry.path());
+//!         }
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//! 
+
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
@@ -10,18 +52,19 @@ use bincode::Options;
 use serde::{Deserialize, Serialize};
 
 // 文件开头和结尾的 Magic Number, 用于检查文件完整性
-const MAGIC_NUMBER_START: &[u8; 10] = b"EmbedFSv01";
-const MAGIC_NUMBER_END: &[u8; 10] = b"EmbedFSEnd";
+const MAGIC_NUMBER_START: &[u8; 7] = b"FRFSv01";
+const MAGIC_NUMBER_END: &[u8; 7] = b"FRFSEnd";
 const USIZE_LEN: usize = usize::MAX.to_be_bytes().len();
 
-// 内部错误类型
+/// Internal error type
+#[non_exhaustive]
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("IO Error: {0}")]
     IO(io::Error),
     #[error("An entity was not found, often a file or a dir")]
     NotFound,
-    #[error("Illegal data: not a FROFS file")]
+    #[error("Illegal data: not a FRFS file")]
     IllegalData,
     #[error("Serialization error: {0}")]
     SerializationError(String),
@@ -37,7 +80,6 @@ impl From<io::Error> for Error {
     }
 }
 
-// 转换为 std::io::Error
 impl From<Error> for io::Error {
     fn from(error: Error) -> Self {
         match error {
@@ -57,25 +99,25 @@ impl From<Error> for io::Error {
 
 // File: 内建文件类型
 // size: 文件大小
-// ofrofset: 文件偏移（目前指针位置），无需序列化
+// offset: 文件偏移（目前指针位置），无需序列化
 // start_at: 文件在 source 中的开始位置
 // mime: 文件类型的 MIMETYPE
 // source: 文件源，无需序列化
+/// The file type returned by the open function implements most of the APIs of std::fs::File
 #[derive(Serialize, Deserialize, Debug)]
 pub struct File {
     size: u64,
     #[serde(skip)]
-    ofrofset: u64,
+    offset: u64,
     start_at: u64,
     mime: String,
     #[serde(skip)]
     source: Option<fs::File>,
 }
 
-// 实现 fs::File::open() 和 file.metadata()
 impl File {
     #[inline]
-    pub fn open<P: AsRef<path::Path>>(fs: &FROFS, path: P) -> Result<File> {
+    pub fn open<P: AsRef<path::Path>>(fs: &FRFS, path: P) -> Result<File> {
         fs.open(path)
     }
     #[inline]
@@ -88,7 +130,7 @@ impl From<fs::File> for File {
     fn from(f: fs::File) -> Self {
         Self {
             size: f.metadata().unwrap().len(),
-            ofrofset: 0,
+            offset: 0,
             start_at: 0,
             mime: "".to_string(),
             source: Some(f),
@@ -96,52 +138,56 @@ impl From<fs::File> for File {
     }
 }
 
-// 实现 Reader Trait
 impl Read for File {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let mut file = match &self.source {
             Some(f) => f,
             None => return Err(Error::NotFound.into()),
         };
-        let ptr_now = file.seek(SeekFrom::Start(self.start_at + self.ofrofset))?;
+        let ptr_now = file.seek(SeekFrom::Start(self.start_at + self.offset))?;
         let ptr_end = self.start_at + self.size;
         let ret = file.take(ptr_end - ptr_now).read(buf)?;
-        self.ofrofset += ret as u64;
+        self.offset += ret as u64;
         Ok(ret)
     }
 }
 
-// 实现 Seek Trait
 impl Seek for File {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
         match pos {
-            SeekFrom::Current(ofrofset) => self.seek(SeekFrom::Current(ofrofset)),
-            SeekFrom::Start(ofrofset) => self.seek(SeekFrom::Start(self.start_at + ofrofset)),
-            SeekFrom::End(ofrofset) => {
-                let ofrofset = if ofrofset > 0 {
+            SeekFrom::Current(offset) => self.seek(SeekFrom::Current(offset)),
+            SeekFrom::Start(offset) => self.seek(SeekFrom::Start(self.start_at + offset)),
+            SeekFrom::End(offset) => {
+                let offset = if offset > 0 {
                     self.start_at + self.size
                 } else {
-                    self.start_at + self.size - ofrofset.abs() as u64
+                    self.start_at + self.size - offset.abs() as u64
                 };
-                self.seek(SeekFrom::Start(ofrofset))
+                self.seek(SeekFrom::Start(offset))
             }
         }
     }
 }
 
-// 实现 File 的一些功能
+/// Metadata information about a file.
+/// This structure is returned from the metadata function or method and 
+/// represents known metadata about a file such as its permissions, size, etc.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Metadata(u64, FileType);
 #[derive(Clone, PartialEq, Eq, Debug)]
+/// Representation of the various permissions on a file.
 pub struct Permissions;
-// FileType(bool: 是否文件)
+/// A structure representing a type of file with accessors for each file type.
+/// It is returned by [Metadata::file_type] method.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FileType(bool);
-// 实现 read_dir
+/// Iterator over the entries in a directory.
+/// This iterator is returned from the [read_dir](FRFS::read_dir) function of this module.
 #[derive(Debug)]
 pub struct ReadDir {
     data: Vec<Result<DirEntry>>,
 }
+/// Entries returned by the [ReadDir] iterator.
 #[derive(Clone, Debug)]
 pub struct DirEntry {
     path: PathBuf,
@@ -149,7 +195,7 @@ pub struct DirEntry {
     file_size: u64,
 }
 
-// 实现文件 metadata 的方法，只读，所有时间返回 UNIX_EPOCH
+/// read only, create/access/modify time returns UNIX_EPOCH
 impl Metadata {
     #[inline]
     pub fn file_type(&self) -> FileType {
@@ -189,7 +235,7 @@ impl Metadata {
     }
 }
 
-// 只读
+/// Read Only
 impl Permissions {
     #[inline]
     pub fn readonly(&self) -> bool {
@@ -197,15 +243,14 @@ impl Permissions {
     }
 }
 
-// 文件类型，由于只能是文件，所以其实都是常量
 impl FileType {
     #[inline]
     pub fn is_dir(&self) -> bool {
-        false
+        !self.0
     }
     #[inline]
     pub fn is_file(&self) -> bool {
-        true
+        self.0
     }
     #[inline]
     pub fn is_symlink(&self) -> bool {
@@ -222,6 +267,10 @@ impl IntoIterator for ReadDir {
 }
 
 impl DirEntry {
+    /// Returns the full path to the file that this entry represents.
+    /// The full path is created by joining the original path to
+    /// read_dir with the filename of this entry.
+    /// Always full path relative to root.
     #[inline]
     pub fn path(&self) -> PathBuf {
         self.path.clone()
@@ -279,7 +328,7 @@ impl Dir {
                 let source = fs::File::open(&path)?;
                 let file = File {
                     size: source.metadata()?.len(),
-                    ofrofset: 0,
+                    offset: 0,
                     start_at: 0,
                     mime: mime_guess::from_path(&path)
                         .first_or_octet_stream()
@@ -303,13 +352,14 @@ impl Dir {
     }
 }
 
-// FROFS: 只读文件系统类型
+// FRFS: 只读文件系统类型
 // root: 根目录'/', 用于存储文件所在位置
 // data_size: 在 base 文件中的 start_at 后所跟的数据大小
 // start_at: 在 base 文件中的开始点，无需序列化
 // base: 文件源，无需序列化
+/// Read-only File System
 #[derive(Serialize, Deserialize, Debug)]
-pub struct FROFS {
+pub struct FRFS {
     root: Dir,
     data_size: u64,
     start_at: u64,
@@ -317,15 +367,14 @@ pub struct FROFS {
     base: Option<fs::File>,
 }
 
-impl FROFS {
-    // 从文件系统创建 frofs 数据
+impl FRFS {
+    /// Create FRFS data from filesystem.
     pub fn build_from_dir<P: AsRef<path::Path>>(source: P) -> Result<Vec<u8>> {
         let embed_fs = Self::from_dir(source)?;
         embed_fs.build()
     }
 
-    /// 从文件夹构造
-    // 从文件夹构造 FROFS 结构体，要求路径存在且为文件夹，有权限读取
+    // 从文件夹构造 FRFS 结构体，要求路径存在且为文件夹，有权限读取
     fn from_dir<P: AsRef<path::Path>>(source: P) -> Result<Self> {
         let source = source.as_ref();
         let mut length: u64 = 0;
@@ -362,7 +411,7 @@ impl FROFS {
         Ok(())
     }
 
-    // 将 FROFS 构建为 Vec<u8>
+    // 将 FRFS 构建为 Vec<u8>
     fn build(mut self) -> Result<Vec<u8>> {
         // 构造数据体，需要比文件头先构建（构建数据时才知道数据头中的data_size），`+1024`防止溢出,
         // 这里的`data_size`仅用于参考创建 Vec 时的长度，实际数据大小为下面的填充后的`data_size`
@@ -407,20 +456,20 @@ impl FROFS {
         Ok(target)
     }
 
-    // 从文件系统创建 frofs 文件
+    /// Create frfs file from file system.
     pub fn pack<P: AsRef<path::Path>>(source: P, target: P) -> Result<()> {
         fs::write(target, Self::build_from_dir(source)?)?;
         Ok(())
     }
 
-    // 从 File 读取 FROFS
+    /// Read FRFS from File.
     pub fn from_embed_file(mut file: File) -> Result<Self> {
         let mut base = tempfile::NamedTempFile::new()?;
         io::copy(&mut file, &mut base)?;
         Self::new(base.path())
     }
 
-    // 从 frofs 文件读取 FROFS
+    /// Load a FRFS file.
     pub fn new<P: AsRef<path::Path> + Copy>(path: P) -> Result<Self> {
         let mut base = fs::File::open(path)?;
         let base_length = base.metadata()?.len();
@@ -472,7 +521,7 @@ impl FROFS {
         Ok(frofs)
     }
 
-    // 在 FROFS 中递归打开路径里的文件的实现
+    // 在 FRFS 中递归打开路径里的文件的实现
     fn open_file(&self, current_dir: &Dir, mut path: path::Iter) -> Result<File> {
         let next_path = match path.next() {
             Some(str) => str.to_string_lossy().to_string(),
@@ -491,7 +540,7 @@ impl FROFS {
             // self.start_at + file.start_at 是这个 file 在 base 里的开始点
             Ok(File {
                 size: file.size,
-                ofrofset: 0, // 让File的文件指针指向0
+                offset: 0, // 让File的文件指针指向0
                 start_at: self.start_at + file.start_at,
                 mime: file.mime.clone(),
                 source: Some(source),
@@ -508,7 +557,7 @@ impl FROFS {
         }
     }
 
-    // 在 FROFS 中递归打开路径里的文件夹的实现
+    // 在 FRFS 中递归打开路径里的文件夹的实现
     fn open_dir<'a>(&self, current_dir: &'a Dir, mut path: path::Iter) -> Result<&'a Dir> {
         let next_path = match path.next() {
             Some(str) => str.to_string_lossy().to_string(),
@@ -526,7 +575,8 @@ impl FROFS {
         }
     }
 
-    // 打开文件，unix like 路径，有无'/'开头均表示从根目录开始
+    /// Open the file, unix like path, with or without '/'
+    /// at the beginning means starting from the root directory.
     pub fn open<P: AsRef<path::Path>>(&self, path: P) -> Result<File> {
         let path = normalize_path(path.as_ref());
         let path = if path.starts_with("/") {
@@ -539,20 +589,29 @@ impl FROFS {
         self.open_file(&self.root, path.iter())
     }
 
+    /// Returns the file (or folder) information of the corresponding path.
     pub fn metadata<P: AsRef<path::Path>>(&self, path: P) -> Result<Metadata> {
         let file = self.open(path)?;
         file.metadata()
     }
 
+    /// Returns an iterator over the entries within a directory.
     pub fn read_dir<P: AsRef<path::Path>>(&self, path: P) -> Result<ReadDir> {
         let path = normalize_path(path.as_ref());
+        let path = if path.starts_with("/") {
+            path.strip_prefix("/")
+                .unwrap_or_else(|_| Path::new(""))
+                .to_path_buf()
+        } else {
+            path
+        };
         let dir = self.open_dir(&self.root, path.iter())?;
         let mut dir_entrys: Vec<Result<DirEntry>> = dir
             .dirs
             .iter()
             .map(|(dir_name, _dir)| {
                 let mut path = path.clone();
-                path.push(dir_name.to_owned() + "/");
+                path.push(dir_name.to_owned());
                 Ok(DirEntry {
                     path,
                     is_file: false,
@@ -576,6 +635,21 @@ impl FROFS {
         dir_entrys.extend(dir_entrys_files);
         Ok(ReadDir { data: dir_entrys })
     }
+}
+
+/// Load a FRFS file.
+pub fn load<P: AsRef<path::Path> + Copy>(path: P) -> Result<FRFS> {
+    FRFS::new(path)
+}
+
+/// Load a FRFS file from frfs::File.
+pub fn load_from_embed_file(file: File) -> Result<FRFS> {
+    FRFS::from_embed_file(file)
+}
+
+/// Pack a folder into a FRFS file.
+pub fn pack<P: AsRef<path::Path>>(source: P, target: P) -> Result<()> {
+    FRFS::pack(source, target)
 }
 
 // Normalize all intermediate components of the path
