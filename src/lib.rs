@@ -14,7 +14,7 @@
 //!
 //! [load]: Load a FRFS file.
 //!
-//! [load_from_embed_file]: Load a FRFS file from frfs::File.
+//! [load_from_file]: Load a FRFS file from frfs::File.
 //!
 //! [pack]: Pack a folder into a FRFS file.
 //!
