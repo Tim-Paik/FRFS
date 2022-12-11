@@ -103,7 +103,7 @@ impl From<Error> for io::Error {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct FileHeader {
     /// The size of the file.
-    pub size: u64,
+    pub file_size: u64,
     /// The offset in the [`File::source`].
     pub start_at: u64,
 }
@@ -128,7 +128,7 @@ impl File {
     }
 
     pub fn metadata(&self) -> Result<Metadata> {
-        Ok(Metadata(self.header.size, FileType(true)))
+        Ok(Metadata(self.header.file_size, FileType(true)))
     }
 
     pub fn try_clone(&self) -> Result<Self> {
@@ -145,7 +145,7 @@ impl From<fs::File> for File {
     fn from(f: fs::File) -> Self {
         Self {
             header: FileHeader {
-                size: f.metadata().unwrap().len(),
+                file_size: f.metadata().unwrap().len(),
                 start_at: 0,
             },
             offset: 0,
@@ -158,7 +158,7 @@ impl Read for File {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         // We should ensure that the reading will not overflow.
         let ret = (&self.source)
-            .take(self.header.size - self.offset)
+            .take(self.header.file_size - self.offset)
             .read(buf)?;
         // ...and update the offset.
         self.offset += ret as u64;
@@ -179,9 +179,9 @@ impl Seek for File {
             // End: should calculate by offset and size.
             SeekFrom::End(offset) => {
                 let offset = if offset > 0 {
-                    self.header.start_at + self.header.size
+                    self.header.start_at + self.header.file_size
                 } else {
-                    self.header.start_at + self.header.size - offset.unsigned_abs()
+                    self.header.start_at + self.header.file_size - offset.unsigned_abs()
                 };
                 self.source.seek(SeekFrom::Start(offset))
             }
@@ -341,10 +341,10 @@ impl Dir {
             // 优先填充文件
             if path.is_file() {
                 let header = FileHeader {
-                    size: std::fs::metadata(path)?.len(),
+                    file_size: std::fs::metadata(path)?.len(),
                     start_at: 0,
                 };
-                length += header.size;
+                length += header.file_size;
                 self.files.insert(name, header);
             } else if path.is_dir() {
                 // 构造子目录
@@ -460,7 +460,7 @@ impl FRFS {
             // self.start_at + file.start_at 是这个 file 在 base 里的开始点
             Ok(File {
                 header: FileHeader {
-                    size: file.size,
+                    file_size: file.file_size,
                     start_at: self.header.start_at + file.start_at,
                 },
                 offset: 0, // 让File的文件指针指向0
@@ -549,7 +549,7 @@ impl FRFS {
                 Ok(DirEntry {
                     path,
                     is_file: true,
-                    file_size: file.size,
+                    file_size: file.file_size,
                 })
             })
             .collect();
@@ -676,14 +676,14 @@ impl FRFSBuilder {
     ) -> Result<u64> {
         for (name, file) in &mut dir.files {
             // 写入文件
-            let mut buf = Vec::with_capacity(file.size as usize);
+            let mut buf = Vec::with_capacity(file.file_size as usize);
             let mut source = fs::File::open(p.join(name))?;
             let len = source.read_to_end(&mut buf)?;
             target.extend(buf);
             // 确定文件偏移
             file.start_at = data_size;
-            file.size = len as u64;
-            data_size += file.size;
+            file.file_size = len as u64;
+            data_size += file.file_size;
         }
         for (name, sub_dir) in &mut dir.dirs {
             data_size += Self::fill_with_files(&p.join(name), sub_dir, target, data_size)?;
