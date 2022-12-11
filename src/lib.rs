@@ -97,29 +97,28 @@ impl From<Error> for io::Error {
     }
 }
 
-// size: 文件大小
-// start_at: 文件在 source 中的开始位置
+/// The header of a file.
+/// It is stored in the [`Dir`] at the start of a FRFS file.
+/// It contains the basic file infomation.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct FileHeader {
-    size: u64,
-    start_at: u64,
+    /// The size of the file.
+    pub size: u64,
+    /// The offset in the [`File::source`].
+    pub start_at: u64,
 }
 
-impl FileHeader {
-    pub fn from_path(p: impl AsRef<Path>) -> Result<Self> {
-        Ok(Self {
-            size: std::fs::metadata(p)?.len(),
-            start_at: 0,
-        })
-    }
-}
-
-// File: 内建文件类型
 /// The file type returned by the open function implements most of the APIs of std::fs::File
 #[derive(Debug)]
 pub struct File {
+    /// The information of the file.
     header: FileHeader,
+    /// The current offset.
+    /// It is used to determine the remain bytes
+    /// and prevent overflow.
     offset: u64,
+    /// The source of the file.
+    /// It should be a FRFS file.
     source: fs::File,
 }
 
@@ -157,9 +156,11 @@ impl From<fs::File> for File {
 
 impl Read for File {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        // We should ensure that the reading will not overflow.
         let ret = (&self.source)
             .take(self.header.size - self.offset)
             .read(buf)?;
+        // ...and update the offset.
         self.offset += ret as u64;
         Ok(ret)
     }
@@ -167,11 +168,15 @@ impl Read for File {
 
 impl Seek for File {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
+        // Redirect the call to the source.
         let offset = match pos {
+            // Current: simply redirect.
             SeekFrom::Current(offset) => self.source.seek(SeekFrom::Current(offset)),
+            // Start: add offset.
             SeekFrom::Start(offset) => self
                 .source
                 .seek(SeekFrom::Start(self.header.start_at + offset)),
+            // End: should calculate by offset and size.
             SeekFrom::End(offset) => {
                 let offset = if offset > 0 {
                     self.header.start_at + self.header.size
@@ -181,6 +186,7 @@ impl Seek for File {
                 self.source.seek(SeekFrom::Start(offset))
             }
         }?;
+        // And finally remove the offset.
         Ok(offset - self.header.start_at)
     }
 }
@@ -334,7 +340,10 @@ impl Dir {
             };
             // 优先填充文件
             if path.is_file() {
-                let header = FileHeader::from_path(path)?;
+                let header = FileHeader {
+                    size: std::fs::metadata(path)?.len(),
+                    start_at: 0,
+                };
                 length += header.size;
                 self.files.insert(name, header);
             } else if path.is_dir() {
@@ -426,6 +435,8 @@ impl FRFS {
                 return Err(Error::DeserializationError(e.to_string()).into());
             }
         };
+        // base header offset may not be zero
+        // because it may be an embedded file.
         header.start_at = start_at + base.header.start_at;
 
         Ok(Self {
