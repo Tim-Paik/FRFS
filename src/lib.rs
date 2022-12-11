@@ -496,7 +496,8 @@ impl FRFS {
         }
     }
 
-    fn normalize_path(path: impl AsRef<Path>) -> PathBuf {
+    /// Normalize the path, and strip the prefix `/`.
+    fn normalize_and_strip(path: impl AsRef<Path>) -> PathBuf {
         let path = normalize_path(path.as_ref());
         if path.starts_with("/") {
             path.strip_prefix("/")
@@ -510,13 +511,13 @@ impl FRFS {
     /// Open the file, unix like path, with or without '/'
     /// at the beginning means starting from the root directory.
     pub fn open<P: AsRef<path::Path>>(&self, path: P) -> Result<File> {
-        let path = Self::normalize_path(path);
+        let path = Self::normalize_and_strip(path);
         self.open_file(&self.header.root, path.iter())
     }
 
     /// Returns the file (or folder) information of the corresponding path.
     pub fn metadata<P: AsRef<path::Path>>(&self, path: P) -> Result<Metadata> {
-        let path = Self::normalize_path(path);
+        let path = Self::normalize_and_strip(path);
         match self.open_file(&self.header.root, path.iter()) {
             Ok(file) => file.metadata(),
             Err(e) => match e.kind() {
@@ -531,7 +532,7 @@ impl FRFS {
 
     /// Returns an iterator over the entries within a directory.
     pub fn read_dir<P: AsRef<path::Path>>(&self, path: P) -> Result<ReadDir> {
-        let path = Self::normalize_path(path);
+        let path = Self::normalize_and_strip(path);
         let dir = Self::open_dir(&self.header.root, path.iter())?;
         let mut dir_entrys: Vec<Result<DirEntry>> = dir
             .dirs
