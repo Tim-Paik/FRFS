@@ -692,7 +692,7 @@ impl FRFSBuilder {
     }
 
     // 将 FRFS 构建为 Vec<u8>
-    fn build(mut self) -> Result<Vec<u8>> {
+    pub fn build(mut self) -> Result<Vec<u8>> {
         // 构造数据体，需要比文件头先构建（构建数据时才知道数据头中的data_size），`+1024`防止溢出,
         // 这里的`data_size`仅用于参考创建 Vec 时的长度，实际数据大小为下面的填充后的`data_size`
         // 如果在调用完`from_dir`后，`build`前修改本地磁盘上的数据，则可能出现二者不一致的情况
