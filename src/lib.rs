@@ -456,14 +456,17 @@ impl FRFS {
                 .ok_or_else(|| Error::Unknown("contains key but no content".to_string()))?;
             let source = self.base.try_clone()?;
             // self.start_at + file.start_at 是这个 file 在 base 里的开始点
-            Ok(File {
+            let mut file = File {
                 header: FileHeader {
                     file_size: file.file_size,
                     start_at: self.header.start_at + file.start_at,
                 },
                 offset: 0, // 让File的文件指针指向0
                 source,
-            })
+            };
+            // Set file cursor to the start of the file.
+            file.rewind()?;
+            Ok(file)
         } else if current_dir.dirs.contains_key(&next_path) {
             let dir = current_dir
                 .dirs
@@ -607,7 +610,7 @@ impl FRFSBuilder {
             data_size += file.file_size;
         }
         for (name, sub_dir) in &mut dir.dirs {
-            data_size += Self::fill_with_files(&p.join(name), sub_dir, target, data_size)?;
+            data_size = Self::fill_with_files(&p.join(name), sub_dir, target, data_size)?;
         }
         Ok(data_size)
     }
