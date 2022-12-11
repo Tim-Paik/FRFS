@@ -1,23 +1,23 @@
 //! # FRFS: File-based Read-only File System
-//! 
+//!
 //! FRFS allows you to pack tons of small files into a single file,
 //! and provides the ability to read randomly, avoid excessively
 //! long paths, and improve copy efficiency.
 //! Recommended for small file packaging.
 //!
 //! Most APIs are similar to std::fs, but read only.
-//! 
+//!
 //! The difference from `std::fs` is that the ReadDir returned by
 //! `read_dir` has the `into_iter()` method instead of `iter()`.
-//! 
+//!
 //! ## Main Function
-//! 
+//!
 //! [load]: Load a FRFS file.
-//! 
+//!
 //! [load_from_embed_file]: Load a FRFS file from frfs::File.
-//! 
+//!
 //! [pack]: Pack a folder into a FRFS file.
-//! 
+//!
 //! ## Example
 //!
 //! ```rust
@@ -38,7 +38,7 @@
 //!     Ok(())
 //! }
 //! ```
-//! 
+//!
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -116,13 +116,16 @@ pub struct File {
 }
 
 impl File {
-    #[inline]
     pub fn open<P: AsRef<path::Path>>(fs: &FRFS, path: P) -> Result<File> {
         fs.open(path)
     }
-    #[inline]
+
     pub fn metadata(&self) -> Result<Metadata> {
         Ok(Metadata(self.size, FileType(true)))
+    }
+
+    pub fn mimetype(&self) -> String {
+        self.mime.clone()
     }
 }
 
@@ -161,7 +164,7 @@ impl Seek for File {
                 let offset = if offset > 0 {
                     self.start_at + self.size
                 } else {
-                    self.start_at + self.size - offset.abs() as u64
+                    self.start_at + self.size - offset.unsigned_abs()
                 };
                 self.seek(SeekFrom::Start(offset))
             }
@@ -170,7 +173,7 @@ impl Seek for File {
 }
 
 /// Metadata information about a file.
-/// This structure is returned from the metadata function or method and 
+/// This structure is returned from the metadata function or method and
 /// represents known metadata about a file such as its permissions, size, etc.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Metadata(u64, FileType);
@@ -197,39 +200,42 @@ pub struct DirEntry {
 
 /// read only, create/access/modify time returns UNIX_EPOCH
 impl Metadata {
-    #[inline]
     pub fn file_type(&self) -> FileType {
         self.1
     }
-    #[inline]
+
     pub fn is_dir(&self) -> bool {
         self.file_type().is_dir()
     }
-    #[inline]
+
     pub fn is_file(&self) -> bool {
         self.file_type().is_file()
     }
-    #[inline]
+
     pub fn is_symlink(&self) -> bool {
         self.file_type().is_symlink()
     }
-    #[inline]
+
     pub fn len(&self) -> u64 {
         self.0
     }
-    #[inline]
+
+    pub fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+
     pub fn permissions(&self) -> Permissions {
         Permissions
     }
-    #[inline]
+
     pub fn modified(&self) -> Result<std::time::SystemTime> {
         Ok(std::time::SystemTime::UNIX_EPOCH)
     }
-    #[inline]
+
     pub fn accessed(&self) -> Result<std::time::SystemTime> {
         Ok(std::time::SystemTime::UNIX_EPOCH)
     }
-    #[inline]
+
     pub fn created(&self) -> Result<std::time::SystemTime> {
         Ok(std::time::SystemTime::UNIX_EPOCH)
     }
@@ -237,22 +243,20 @@ impl Metadata {
 
 /// Read Only
 impl Permissions {
-    #[inline]
     pub fn readonly(&self) -> bool {
         true
     }
 }
 
 impl FileType {
-    #[inline]
     pub fn is_dir(&self) -> bool {
         !self.0
     }
-    #[inline]
+
     pub fn is_file(&self) -> bool {
         self.0
     }
-    #[inline]
+
     pub fn is_symlink(&self) -> bool {
         false
     }
@@ -271,12 +275,10 @@ impl DirEntry {
     /// The full path is created by joining the original path to
     /// read_dir with the filename of this entry.
     /// Always full path relative to root.
-    #[inline]
     pub fn path(&self) -> PathBuf {
         self.path.clone()
     }
 
-    #[inline]
     pub fn file_name(&self) -> OsString {
         self.path
             .file_name()
@@ -284,12 +286,10 @@ impl DirEntry {
             .to_os_string()
     }
 
-    #[inline]
     pub fn metadata(&self) -> Result<Metadata> {
         Ok(Metadata(self.file_size, self.file_type()?))
     }
 
-    #[inline]
     pub fn file_type(&self) -> Result<FileType> {
         Ok(FileType(self.is_file))
     }
@@ -394,7 +394,7 @@ impl FRFS {
     // 从 Dir 中读取文件路径`source`，不编码直接二进制写入 target，写入后增加 data_size(已写入的文件大小)
     fn fill_with_files(dir: &mut Dir, target: &mut Vec<u8>, data_size: &mut u64) -> Result<()> {
         for file in dir.files.values_mut() {
-            let mut source = file.source.as_ref().ok_or_else(|| Error::NotFound)?;
+            let mut source = file.source.as_ref().ok_or(Error::NotFound)?;
             // 更新文件长度（调用完`from_dir`后，`build`前修改本地磁盘上的数据，文件长度可能变更）
             file.size = source.metadata()?.len();
             // 写入文件
@@ -439,7 +439,7 @@ impl FRFS {
         // 写入 Magic Number
         target.extend(MAGIC_NUMBER_START);
         // 写入文件头长度
-        target.extend(&header.len().to_be_bytes());
+        target.extend(header.len().to_be_bytes());
         // 写入 bincode 编码的文件头
         target.extend(&header);
         // 写入文件数据
@@ -532,11 +532,7 @@ impl FRFS {
                 .files
                 .get(&next_path)
                 .ok_or_else(|| Error::Unknown("contains key but no content".to_string()))?;
-            let source = self
-                .base
-                .as_ref()
-                .ok_or_else(|| Error::NotFound)?
-                .try_clone()?;
+            let source = self.base.as_ref().ok_or(Error::NotFound)?.try_clone()?;
             // self.start_at + file.start_at 是这个 file 在 base 里的开始点
             Ok(File {
                 size: file.size,
@@ -611,7 +607,7 @@ impl FRFS {
             .iter()
             .map(|(dir_name, _dir)| {
                 let mut path = path.clone();
-                path.push(dir_name.to_owned());
+                path.push(dir_name);
                 Ok(DirEntry {
                     path,
                     is_file: false,
