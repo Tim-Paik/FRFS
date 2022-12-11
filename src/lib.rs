@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 // 文件开头和结尾的 Magic Number, 用于检查文件完整性
 const MAGIC_NUMBER_START: &[u8; 7] = b"FRFSv02";
 const MAGIC_NUMBER_END: &[u8; 7] = b"FRFSEnd";
-const USIZE_LEN: usize = usize::MAX.to_be_bytes().len();
+const U64_LEN: usize = std::mem::size_of::<u64>();
 
 /// Internal error type
 #[non_exhaustive]
@@ -394,9 +394,9 @@ impl FRFS {
     /// Load a FRFS file.
     pub fn from_file(mut base: File) -> Result<Self> {
         let mut magic_number_start_data = [0; MAGIC_NUMBER_START.len()];
-        let mut header_length_data = [0; USIZE_LEN];
+        let mut header_length_data = [0; U64_LEN];
         let mut header_data = Vec::new();
-        let mut data_length_data = [0; USIZE_LEN]; // 即创建文件时的 target_length 的 be_bytes 形式
+        let mut data_length_data = [0; U64_LEN]; // 即创建文件时的 target_length 的 be_bytes 形式
         let mut magic_number_end_data = [0; MAGIC_NUMBER_END.len()];
         base.seek(SeekFrom::End(-(MAGIC_NUMBER_END.len() as i64)))?;
         // 此时指针指向 MAGIC_NUMBER_END 之前
@@ -404,9 +404,7 @@ impl FRFS {
         if &magic_number_end_data != MAGIC_NUMBER_END {
             return Err(Error::IllegalData.into());
         }
-        base.seek(SeekFrom::End(
-            -(MAGIC_NUMBER_END.len() as i64 + USIZE_LEN as i64),
-        ))?;
+        base.seek(SeekFrom::End(-((MAGIC_NUMBER_END.len() + U64_LEN) as i64)))?;
         // 此时指针指向 data_length 之前
         base.read_exact(&mut data_length_data)?;
         base.seek(SeekFrom::End(
@@ -634,7 +632,7 @@ impl FRFSBuilder {
         // 写入 Magic Number
         target.extend(MAGIC_NUMBER_START);
         // 写入文件头长度
-        target.extend(header.len().to_be_bytes());
+        target.extend((header.len() as u64).to_be_bytes());
         // 写入 bincode 编码的文件头
         target.extend(&header);
         // 写入文件数据
@@ -642,9 +640,9 @@ impl FRFSBuilder {
         // 计算此时 target 长度并写入
         let target_length = target.len();
         // U64_LEN 是 target_length 的长度
-        let target_length = target_length + USIZE_LEN;
+        let target_length = target_length + U64_LEN;
         let target_length = target_length + MAGIC_NUMBER_END.len();
-        target.extend(target_length.to_be_bytes());
+        target.extend((target_length as u64).to_be_bytes());
         // 写入文件尾
         target.extend(MAGIC_NUMBER_END);
 
