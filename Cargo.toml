@@ -17,5 +17,4 @@ thiserror = "1.0"
 vfs = { version = "0.8.0", optional = true }
 
 [features]
-default = ["frfs_vfs"]
 frfs_vfs = ["vfs"]
