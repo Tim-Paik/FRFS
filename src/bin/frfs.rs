@@ -1,6 +1,3 @@
-#[cfg(not(all(feature = "argh", feature = "anyhow")))]
-compile_error!("Need bin feature to compile frfs cli");
-
 use argh::FromArgs;
 
 #[derive(FromArgs, PartialEq, Debug)]

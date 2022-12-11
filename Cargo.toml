@@ -20,5 +20,6 @@ vfs = { version = "0.8.0", optional = true }
 name = "vfs"
 required-features = ["vfs"]
 
-[features]
-bin = ["anyhow", "argh"]
+[[bin]]
+name = "frfs"
+required-features = ["argh", "anyhow"]
