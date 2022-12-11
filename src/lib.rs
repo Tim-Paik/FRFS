@@ -52,7 +52,7 @@ use bincode::Options;
 use serde::{Deserialize, Serialize};
 
 // 文件开头和结尾的 Magic Number, 用于检查文件完整性
-const MAGIC_NUMBER_START: &[u8; 7] = b"FRFSv01";
+const MAGIC_NUMBER_START: &[u8; 7] = b"FRFSv02";
 const MAGIC_NUMBER_END: &[u8; 7] = b"FRFSEnd";
 const USIZE_LEN: usize = usize::MAX.to_be_bytes().len();
 
