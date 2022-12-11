@@ -366,7 +366,7 @@ impl Dir {
 // data_size: 在 base 文件中的 start_at 后所跟的数据大小
 // start_at: 在 base 文件中的开始点，无需序列化
 #[derive(Debug, Serialize, Deserialize)]
-struct Header {
+struct FRFSHeader {
     pub root: Dir,
     pub data_size: u64,
     pub start_at: u64,
@@ -377,7 +377,7 @@ struct Header {
 /// Read-only File System
 #[derive(Debug)]
 pub struct FRFS {
-    header: Header,
+    header: FRFSHeader,
     base: fs::File,
 }
 
@@ -429,7 +429,7 @@ impl FRFS {
             .with_fixint_encoding()
             .allow_trailing_bytes()
             .with_limit(104857600 /* 100MiB */);
-        let mut header: Header = match serialize_options.deserialize(&header_data) {
+        let mut header: FRFSHeader = match serialize_options.deserialize(&header_data) {
             Ok(header) => header,
             Err(e) => {
                 return Err(Error::DeserializationError(e.to_string()).into());
@@ -644,7 +644,7 @@ pub fn load_from_file(file: File) -> Result<FRFS> {
 
 #[derive(Debug)]
 pub struct FRFSBuilder {
-    header: Header,
+    header: FRFSHeader,
     source: PathBuf,
 }
 
@@ -658,7 +658,7 @@ impl FRFSBuilder {
         };
         let length = dir.fill_with(source, source)?;
         Ok(Self {
-            header: Header {
+            header: FRFSHeader {
                 root: dir,
                 data_size: length,
                 start_at: 0,
