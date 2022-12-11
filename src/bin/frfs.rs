@@ -1,4 +1,5 @@
 use argh::FromArgs;
+use std::io::Result;
 
 #[derive(FromArgs, PartialEq, Debug)]
 /// Command line interface for frfs
@@ -38,11 +39,7 @@ struct UnpackOpt {
     dst: String,
 }
 
-fn unpack(
-    fs: &frfs::FRFS,
-    src_dir: std::path::PathBuf,
-    dst_dir: std::path::PathBuf,
-) -> anyhow::Result<()> {
+fn unpack(fs: &frfs::FRFS, src_dir: std::path::PathBuf, dst_dir: std::path::PathBuf) -> Result<()> {
     std::fs::create_dir_all(&dst_dir)?;
     for entry in fs.read_dir(src_dir)? {
         let entry = entry?;
@@ -58,7 +55,7 @@ fn unpack(
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     let args: Args = argh::from_env();
     match args.cmd {
         Command::Pack(opt) => {
