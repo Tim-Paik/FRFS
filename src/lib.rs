@@ -113,10 +113,6 @@ struct FileHeader {
 pub struct File {
     /// The information of the file.
     header: FileHeader,
-    /// The current offset.
-    /// It is used to determine the remain bytes
-    /// and prevent overflow.
-    offset: u64,
     /// The source of the file.
     /// It should be a FRFS file.
     source: fs::File,
@@ -135,7 +131,6 @@ impl File {
         let source = self.source.try_clone()?;
         Ok(Self {
             header: self.header.clone(),
-            offset: self.offset,
             source,
         })
     }
@@ -148,7 +143,6 @@ impl From<fs::File> for File {
                 file_size: f.metadata().unwrap().len(),
                 start_at: 0,
             },
-            offset: 0,
             source: f,
         }
     }
@@ -156,12 +150,12 @@ impl From<fs::File> for File {
 
 impl Read for File {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let offset = self.stream_position()?;
         // We should ensure that the reading will not overflow.
         let ret = (&self.source)
-            .take(self.header.file_size - self.offset)
+            .take(self.header.file_size - offset)
             .read(buf)?;
         // ...and update the offset.
-        self.offset += ret as u64;
         Ok(ret)
     }
 }
@@ -461,7 +455,6 @@ impl FRFS {
                     file_size: file.file_size,
                     start_at: self.header.start_at + file.start_at,
                 },
-                offset: 0, // 让File的文件指针指向0
                 source,
             };
             // Set file cursor to the start of the file.
