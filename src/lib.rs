@@ -538,6 +538,80 @@ impl FRFS {
     }
 }
 
+#[cfg(feature = "vfs")]
+fn str_to_path(path: &str) -> PathBuf {
+    let path = normalize_path(path.as_ref());
+    if path.starts_with("/") {
+        path.strip_prefix("/")
+            .unwrap_or_else(|_| Path::new(""))
+            .to_path_buf()
+    } else {
+        path
+    }
+}
+
+#[cfg(feature = "vfs")]
+impl vfs::filesystem::FileSystem for FRFS {
+    fn read_dir(&self, path: &str) -> vfs::VfsResult<Box<dyn Iterator<Item = String>>> {
+        let path = str_to_path(path);
+        let dir = Self::open_dir(&self.root, path.iter())?;
+        let keys: Vec<String> = dir
+            .dirs
+            .keys()
+            .map(|x| x.to_owned())
+            .chain(dir.files.keys().map(|x| x.to_owned()))
+            .collect();
+        Ok(Box::new(keys.into_iter()))
+    }
+
+    fn create_dir(&self, _path: &str) -> vfs::VfsResult<()> {
+        Err(vfs::error::VfsErrorKind::NotSupported.into())
+    }
+
+    fn open_file(&self, path: &str) -> vfs::VfsResult<Box<dyn vfs::SeekAndRead>> {
+        Ok(Box::new(self.open(path)?))
+    }
+
+    fn create_file(&self, _path: &str) -> vfs::VfsResult<Box<dyn io::Write>> {
+        Err(vfs::error::VfsErrorKind::NotSupported.into())
+    }
+
+    fn append_file(&self, _path: &str) -> vfs::VfsResult<Box<dyn io::Write>> {
+        Err(vfs::error::VfsErrorKind::NotSupported.into())
+    }
+
+    fn metadata(&self, path: &str) -> vfs::VfsResult<vfs::VfsMetadata> {
+        let file = self.open(path)?;
+        let metadata = file.metadata()?;
+        Ok(vfs::VfsMetadata {
+            file_type: if metadata.is_dir() {
+                vfs::VfsFileType::Directory
+            } else {
+                vfs::VfsFileType::File
+            },
+            len: metadata.len(),
+        })
+    }
+
+    fn exists(&self, path: &str) -> vfs::VfsResult<bool> {
+        match self.metadata(path) {
+            Ok(_) => Ok(true),
+            Err(e) => match e.kind() {
+                io::ErrorKind::NotFound => Ok(false),
+                _ => Err(vfs::VfsError::from(e)),
+            },
+        }
+    }
+
+    fn remove_file(&self, _path: &str) -> vfs::VfsResult<()> {
+        Err(vfs::error::VfsErrorKind::NotSupported.into())
+    }
+
+    fn remove_dir(&self, _path: &str) -> vfs::VfsResult<()> {
+        Err(vfs::error::VfsErrorKind::NotSupported.into())
+    }
+}
+
 /// Load a FRFS file.
 pub fn load(path: impl AsRef<Path>) -> Result<FRFS> {
     FRFS::new(path)
