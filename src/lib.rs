@@ -554,7 +554,7 @@ impl FRFS {
     }
 
     // 在 FRFS 中递归打开路径里的文件夹的实现
-    fn open_dir<'a>(&self, current_dir: &'a Dir, mut path: path::Iter) -> Result<&'a Dir> {
+    fn open_dir<'a>(current_dir: &'a Dir, mut path: path::Iter) -> Result<&'a Dir> {
         let next_path = match path.next() {
             Some(str) => str.to_string_lossy().to_string(),
             None => return Ok(current_dir),
@@ -565,7 +565,7 @@ impl FRFS {
                 .get(&next_path)
                 .ok_or_else(|| Error::Unknown("contains key but no content".to_string()))?;
             // 递归查找
-            self.open_dir(dir, path)
+            Self::open_dir(dir, path)
         } else {
             Err(Error::NotFound.into())
         }
@@ -601,7 +601,7 @@ impl FRFS {
         } else {
             path
         };
-        let dir = self.open_dir(&self.root, path.iter())?;
+        let dir = Self::open_dir(&self.root, path.iter())?;
         let mut dir_entrys: Vec<Result<DirEntry>> = dir
             .dirs
             .iter()
