@@ -99,7 +99,7 @@ impl From<Error> for io::Error {
 
 // size: 文件大小
 // start_at: 文件在 source 中的开始位置
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct FileHeader {
     size: u64,
     start_at: u64,
@@ -115,8 +115,6 @@ impl FileHeader {
 }
 
 // File: 内建文件类型
-// offset: 文件偏移（目前指针位置），无需序列化
-// source: 文件源，无需序列化
 /// The file type returned by the open function implements most of the APIs of std::fs::File
 #[derive(Debug)]
 pub struct File {
@@ -132,6 +130,15 @@ impl File {
 
     pub fn metadata(&self) -> Result<Metadata> {
         Ok(Metadata(self.header.size, FileType(true)))
+    }
+
+    pub fn try_clone(&self) -> Result<Self> {
+        let source = self.source.try_clone()?;
+        Ok(Self {
+            header: self.header.clone(),
+            offset: self.offset,
+            source,
+        })
     }
 }
 
@@ -150,11 +157,9 @@ impl From<fs::File> for File {
 
 impl Read for File {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let ptr_now = self
-            .source
-            .seek(SeekFrom::Start(self.header.start_at + self.offset))?;
-        let ptr_end = self.header.start_at + self.header.size;
-        let ret = self.source.try_clone()?.take(ptr_end - ptr_now).read(buf)?;
+        let ret = (&self.source)
+            .take(self.header.size - self.offset)
+            .read(buf)?;
         self.offset += ret as u64;
         Ok(ret)
     }
@@ -162,18 +167,21 @@ impl Read for File {
 
 impl Seek for File {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        match pos {
-            SeekFrom::Current(offset) => self.seek(SeekFrom::Current(offset)),
-            SeekFrom::Start(offset) => self.seek(SeekFrom::Start(self.header.start_at + offset)),
+        let offset = match pos {
+            SeekFrom::Current(offset) => self.source.seek(SeekFrom::Current(offset)),
+            SeekFrom::Start(offset) => self
+                .source
+                .seek(SeekFrom::Start(self.header.start_at + offset)),
             SeekFrom::End(offset) => {
                 let offset = if offset > 0 {
                     self.header.start_at + self.header.size
                 } else {
                     self.header.start_at + self.header.size - offset.unsigned_abs()
                 };
-                self.seek(SeekFrom::Start(offset))
+                self.source.seek(SeekFrom::Start(offset))
             }
-        }
+        }?;
+        Ok(offset - self.header.start_at)
     }
 }
 
@@ -370,32 +378,30 @@ impl FRFS {
     }
 
     /// Read FRFS from File.
-    pub fn from_file(file: File) -> Result<Self> {
-        Self::from_std_file(file.source)
+    pub fn from_std_file(file: fs::File) -> Result<Self> {
+        Self::from_file(file.into())
     }
 
     /// Load a FRFS file.
-    pub fn from_std_file(f: fs::File) -> Result<Self> {
-        let mut base = f.try_clone()?;
-        let base_length = base.metadata()?.len();
+    pub fn from_file(mut base: File) -> Result<Self> {
         let mut magic_number_start_data = [0; MAGIC_NUMBER_START.len()];
         let mut header_length_data = [0; USIZE_LEN];
         let mut header_data = Vec::new();
         let mut data_length_data = [0; USIZE_LEN]; // 即创建文件时的 target_length 的 be_bytes 形式
         let mut magic_number_end_data = [0; MAGIC_NUMBER_END.len()];
-        base.seek(SeekFrom::Start(base_length - MAGIC_NUMBER_END.len() as u64))?;
+        base.seek(SeekFrom::End(-(MAGIC_NUMBER_END.len() as i64)))?;
         // 此时指针指向 MAGIC_NUMBER_END 之前
         base.read_exact(&mut magic_number_end_data)?;
         if &magic_number_end_data != MAGIC_NUMBER_END {
             return Err(Error::IllegalData.into());
         }
-        base.seek(SeekFrom::Start(
-            base_length - MAGIC_NUMBER_END.len() as u64 - USIZE_LEN as u64,
+        base.seek(SeekFrom::End(
+            -(MAGIC_NUMBER_END.len() as i64 + USIZE_LEN as i64),
         ))?;
         // 此时指针指向 data_length 之前
         base.read_exact(&mut data_length_data)?;
-        base.seek(SeekFrom::Start(
-            base_length - u64::from_be_bytes(data_length_data),
+        base.seek(SeekFrom::End(
+            -(u64::from_be_bytes(data_length_data) as i64),
         ))?;
         // 此时指针指向 MAGIC_NUMBER_START
         base.read_exact(&mut magic_number_start_data)?;
@@ -406,7 +412,7 @@ impl FRFS {
         // start_at 指 Data 段在 base 的位置
         let start_at = base.stream_position()?;
         let start_at = start_at
-            + base
+            + (&mut base)
                 .take(u64::from_be_bytes(header_length_data))
                 .read_to_end(&mut header_data)? as u64;
         // 此时指针在 Header 后，Data 前
@@ -420,9 +426,12 @@ impl FRFS {
                 return Err(Error::DeserializationError(e.to_string()).into());
             }
         };
-        header.start_at = start_at;
+        header.start_at = start_at + base.header.start_at;
 
-        Ok(Self { header, base: f })
+        Ok(Self {
+            header,
+            base: base.source,
+        })
     }
 
     // 在 FRFS 中递归打开路径里的文件的实现
@@ -658,8 +667,7 @@ impl FRFSBuilder {
             // 写入文件
             let mut buf = Vec::with_capacity(file.size as usize);
             let mut source = fs::File::open(p.join(name))?;
-            source.read_to_end(&mut buf)?;
-            let len = buf.len();
+            let len = source.read_to_end(&mut buf)?;
             target.extend(buf);
             // 确定文件偏移
             file.start_at = data_size;
