@@ -496,36 +496,42 @@ impl FRFS {
         }
     }
 
-    /// Open the file, unix like path, with or without '/'
-    /// at the beginning means starting from the root directory.
-    pub fn open<P: AsRef<path::Path>>(&self, path: P) -> Result<File> {
+    fn normalize_path(path: impl AsRef<Path>) -> PathBuf {
         let path = normalize_path(path.as_ref());
-        let path = if path.starts_with("/") {
+        if path.starts_with("/") {
             path.strip_prefix("/")
                 .unwrap_or_else(|_| Path::new(""))
                 .to_path_buf()
         } else {
             path
-        };
+        }
+    }
+
+    /// Open the file, unix like path, with or without '/'
+    /// at the beginning means starting from the root directory.
+    pub fn open<P: AsRef<path::Path>>(&self, path: P) -> Result<File> {
+        let path = Self::normalize_path(path);
         self.open_file(&self.header.root, path.iter())
     }
 
     /// Returns the file (or folder) information of the corresponding path.
     pub fn metadata<P: AsRef<path::Path>>(&self, path: P) -> Result<Metadata> {
-        let file = self.open(path)?;
-        file.metadata()
+        let path = Self::normalize_path(path);
+        match self.open_file(&self.header.root, path.iter()) {
+            Ok(file) => file.metadata(),
+            Err(e) => match e.kind() {
+                ErrorKind::NotFound => {
+                    Self::open_dir(&self.header.root, path.iter())?;
+                    Ok(Metadata(0, FileType(false)))
+                }
+                _ => Err(e),
+            },
+        }
     }
 
     /// Returns an iterator over the entries within a directory.
     pub fn read_dir<P: AsRef<path::Path>>(&self, path: P) -> Result<ReadDir> {
-        let path = normalize_path(path.as_ref());
-        let path = if path.starts_with("/") {
-            path.strip_prefix("/")
-                .unwrap_or_else(|_| Path::new(""))
-                .to_path_buf()
-        } else {
-            path
-        };
+        let path = Self::normalize_path(path);
         let dir = Self::open_dir(&self.header.root, path.iter())?;
         let mut dir_entrys: Vec<Result<DirEntry>> = dir
             .dirs
@@ -668,7 +674,7 @@ fn str_to_path(path: &str) -> PathBuf {
 impl vfs::filesystem::FileSystem for FRFS {
     fn read_dir(&self, path: &str) -> vfs::VfsResult<Box<dyn Iterator<Item = String>>> {
         let path = str_to_path(path);
-        let dir = Self::open_dir(&self.root, path.iter())?;
+        let dir = Self::open_dir(&self.header.root, path.iter())?;
         let keys: Vec<String> = dir
             .dirs
             .keys()
@@ -695,8 +701,7 @@ impl vfs::filesystem::FileSystem for FRFS {
     }
 
     fn metadata(&self, path: &str) -> vfs::VfsResult<vfs::VfsMetadata> {
-        let file = self.open(path)?;
-        let metadata = file.metadata()?;
+        let metadata = self.metadata(path)?;
         Ok(vfs::VfsMetadata {
             file_type: if metadata.is_dir() {
                 vfs::VfsFileType::Directory
