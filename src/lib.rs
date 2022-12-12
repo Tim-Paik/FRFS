@@ -40,6 +40,8 @@
 //! ```
 //!
 
+mod read_at;
+
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Debug;
@@ -113,6 +115,12 @@ struct FileHeader {
 pub struct File {
     /// The information of the file.
     header: FileHeader,
+    /// The offset (file cursor) of the file.
+    /// We use the same source in FRFS.
+    /// Therefore we cannot use the file cursor inside the file handle.
+    ///
+    /// It should not larger than header.file_size.
+    offset: u64,
     /// The source of the file.
     /// It should be a FRFS file.
     source: fs::File,
@@ -126,23 +134,17 @@ impl File {
     pub fn metadata(&self) -> Result<Metadata> {
         Ok(Metadata(self.header.file_size, FileType(true)))
     }
-
-    pub fn try_clone(&self) -> Result<Self> {
-        let source = self.source.try_clone()?;
-        Ok(Self {
-            header: self.header.clone(),
-            source,
-        })
-    }
 }
 
 impl From<fs::File> for File {
-    fn from(f: fs::File) -> Self {
+    fn from(mut f: fs::File) -> Self {
         Self {
             header: FileHeader {
                 file_size: f.metadata().unwrap().len(),
                 start_at: 0,
             },
+            // The input fs::File may not at the start.
+            offset: f.stream_position().unwrap(),
             source: f,
         }
     }
@@ -150,38 +152,50 @@ impl From<fs::File> for File {
 
 impl Read for File {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let offset = self.stream_position()?;
-        // We should ensure that the reading will not overflow.
-        let ret = (&self.source)
-            .take(self.header.file_size - offset)
-            .read(buf)?;
+        // Calculate remain file size.
+        // This is the largest size the user can read.
+        let remain_size = (self.header.file_size - self.offset) as usize;
+        // Slice the buffer to make sure no overflow.
+        let buf = if buf.len() > remain_size {
+            &mut buf[..remain_size]
+        } else {
+            buf
+        };
+        // The real offset should add self.header.start_at
+        let ret = read_at::read_at(&self.source, buf, self.offset + self.header.start_at)?;
         // ...and update the offset.
+        self.offset += ret as u64;
         Ok(ret)
     }
 }
 
 impl Seek for File {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64> {
-        // Redirect the call to the source.
-        let offset = match pos {
-            // Current: simply redirect.
-            SeekFrom::Current(offset) => self.source.seek(SeekFrom::Current(offset)),
-            // Start: add offset.
-            SeekFrom::Start(offset) => self
-                .source
-                .seek(SeekFrom::Start(self.header.start_at + offset)),
-            // End: should calculate by offset and size.
-            SeekFrom::End(offset) => {
-                let offset = if offset > 0 {
-                    self.header.start_at + self.header.file_size
-                } else {
-                    self.header.start_at + self.header.file_size - offset.unsigned_abs()
-                };
-                self.source.seek(SeekFrom::Start(offset))
+        match pos {
+            // Current: simply add the offset.
+            // But it should not larger than file_size.
+            SeekFrom::Current(offset) => {
+                self.offset = self
+                    .offset
+                    .wrapping_add_signed(offset)
+                    .min(self.header.file_size);
             }
-        }?;
-        // And finally remove the offset.
-        Ok(offset - self.header.start_at)
+            // Start: simply assign.
+            // But it should not larger than file_size.
+            SeekFrom::Start(offset) => {
+                self.offset = offset.min(self.header.file_size);
+            }
+            // End: sub from file_size.
+            // It cannot be larger than file_size.
+            SeekFrom::End(offset) => {
+                self.offset = if offset >= 0 {
+                    self.header.file_size
+                } else {
+                    self.header.file_size - offset.unsigned_abs()
+                };
+            }
+        }
+        Ok(self.offset)
     }
 }
 
@@ -449,17 +463,15 @@ impl FRFS {
                 .get(&next_path)
                 .ok_or_else(|| Error::Unknown("contains key but no content".to_string()))?;
             let source = self.base.try_clone()?;
-            // self.start_at + file.start_at 是这个 file 在 base 里的开始点
-            let mut file = File {
+            // self.header.start_at + file.start_at 是这个 file 在 base 里的开始点
+            Ok(File {
                 header: FileHeader {
                     file_size: file.file_size,
                     start_at: self.header.start_at + file.start_at,
                 },
+                offset: 0, // Set the file cursor at start
                 source,
-            };
-            // Set file cursor to the start of the file.
-            file.rewind()?;
-            Ok(file)
+            })
         } else if current_dir.dirs.contains_key(&next_path) {
             let dir = current_dir
                 .dirs
