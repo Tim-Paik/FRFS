@@ -191,8 +191,8 @@ impl Seek for File {
                 self.offset = if offset >= 0 {
                     self.header.file_size
                 } else {
-                    self.header.file_size - offset.unsigned_abs()
-                };
+                    self.header.file_size.wrapping_add_signed(offset)
+                }
             }
         }
         Ok(self.offset)
