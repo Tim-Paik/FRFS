@@ -1,4 +1,5 @@
 use argh::FromArgs;
+use frfs::MagicNumber;
 use std::io::Result;
 
 #[derive(FromArgs, PartialEq, Debug)]
@@ -25,6 +26,12 @@ struct PackOpt {
     #[argh(positional)]
     /// the path to the packaged frfs
     dst: String,
+    #[argh(option, from_str_fn(parse_magic_number))]
+    /// custom magic number start
+    magic_number_start: Option<MagicNumber>,
+    #[argh(option, from_str_fn(parse_magic_number))]
+    /// custom magic number start
+    magic_number_end: Option<MagicNumber>,
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
@@ -37,6 +44,19 @@ struct UnpackOpt {
     #[argh(positional)]
     /// folder to unpack into
     dst: String,
+    #[argh(option, from_str_fn(parse_magic_number))]
+    /// custom magic number start
+    magic_number_start: Option<MagicNumber>,
+    #[argh(option, from_str_fn(parse_magic_number))]
+    /// custom magic number start
+    magic_number_end: Option<MagicNumber>,
+}
+
+fn parse_magic_number(value: &str) -> std::result::Result<MagicNumber, String> {
+    value
+        .as_bytes()
+        .try_into()
+        .map_err(|_| format!("magic number should be a [u8; 7]"))
 }
 
 fn unpack(fs: &frfs::FRFS, src_dir: std::path::PathBuf, dst_dir: std::path::PathBuf) -> Result<()> {
@@ -59,10 +79,27 @@ fn main() -> Result<()> {
     let args: Args = argh::from_env();
     match args.cmd {
         Command::Pack(opt) => {
-            frfs::pack(opt.src, opt.dst)?;
+            if opt.magic_number_end.is_none() || opt.magic_number_end.is_none() {
+                frfs::pack(opt.src, opt.dst)?;
+            } else {
+                frfs::pack_with_header(
+                    opt.src,
+                    opt.dst,
+                    opt.magic_number_start.unwrap(),
+                    opt.magic_number_end.unwrap(),
+                )?;
+            }
         }
         Command::Unpack(opt) => {
-            let fs = frfs::load(&opt.src)?;
+            let fs = if opt.magic_number_end.is_none() || opt.magic_number_end.is_none() {
+                frfs::load(&opt.src)?
+            } else {
+                frfs::load_with_header(
+                    &opt.src,
+                    opt.magic_number_start.unwrap(),
+                    opt.magic_number_end.unwrap(),
+                )?
+            };
             unpack(&fs, "/".into(), opt.dst.into())?;
         }
     }

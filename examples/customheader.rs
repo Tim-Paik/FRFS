@@ -1,8 +1,8 @@
 fn main() -> std::io::Result<()> {
     // Pack a frfs file
-    frfs::pack_with_header("src", "./src.frfs", b"TESTv01", b"TESTEnd")?;
+    frfs::pack_with_header("src", "./src.frfs", *b"TESTv01", *b"TESTEnd")?;
     // then open it
-    let fs = frfs::load_with_header("./src.frfs", b"TESTv01", b"TESTEnd")?;
+    let fs = frfs::load_with_header("./src.frfs", *b"TESTv01", *b"TESTEnd")?;
     // iterating over and printing what's inside is as easy as using std::fs
     for entry in fs.read_dir("/")? {
         let entry = entry?;

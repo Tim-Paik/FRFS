@@ -54,9 +54,9 @@ use bincode::Options;
 use serde::{Deserialize, Serialize};
 
 // 文件开头和结尾的 Magic Number, 用于检查文件完整性
-type MagicNumber = &'static [u8; 7];
-const MAGIC_NUMBER_START: MagicNumber = b"FRFSv02";
-const MAGIC_NUMBER_END: MagicNumber = b"FRFSEnd";
+pub type MagicNumber = [u8; 7];
+const MAGIC_NUMBER_START: MagicNumber = *b"FRFSv02";
+const MAGIC_NUMBER_END: MagicNumber = *b"FRFSEnd";
 const U64_LEN: usize = std::mem::size_of::<u64>();
 
 /// Internal error type
@@ -436,7 +436,7 @@ impl FRFS {
         base.seek(SeekFrom::End(-(magic_number_end.len() as i64)))?;
         // 此时指针指向 magic_number_end 之前
         base.read_exact(&mut magic_number_end_data)?;
-        if &magic_number_end_data != magic_number_end {
+        if magic_number_end_data != magic_number_end {
             return Err(Error::IllegalData.into());
         }
         base.seek(SeekFrom::End(-((magic_number_end.len() + U64_LEN) as i64)))?;
@@ -447,7 +447,7 @@ impl FRFS {
         ))?;
         // 此时指针指向 magic_number_start
         base.read_exact(&mut magic_number_start_data)?;
-        if &magic_number_start_data != magic_number_start {
+        if magic_number_start_data != magic_number_start {
             return Err(Error::IllegalData.into());
         }
         base.read_exact(&mut header_length_data)?;
