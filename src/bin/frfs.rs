@@ -56,7 +56,7 @@ fn parse_magic_number(value: &str) -> std::result::Result<MagicNumber, String> {
     value
         .as_bytes()
         .try_into()
-        .map_err(|_| format!("magic number should be a [u8; 7]"))
+        .map_err(|_| "magic number should be a [u8; 7]".to_string())
 }
 
 fn unpack(fs: &frfs::FRFS, src_dir: std::path::PathBuf, dst_dir: std::path::PathBuf) -> Result<()> {
@@ -79,7 +79,10 @@ fn main() -> Result<()> {
     let args: Args = argh::from_env();
     match args.cmd {
         Command::Pack(opt) => {
-            if opt.magic_number_end.is_none() || opt.magic_number_end.is_none() {
+            if opt.magic_number_start.is_none() || opt.magic_number_end.is_none() {
+                if opt.magic_number_start.is_some() || opt.magic_number_end.is_some() {
+                    println!("WARN: magic_number_start and magic_number_end need to be provided at the same time, magic_number will be ignored");
+                }
                 frfs::pack(opt.src, opt.dst)?;
             } else {
                 frfs::pack_with_header(
@@ -91,7 +94,10 @@ fn main() -> Result<()> {
             }
         }
         Command::Unpack(opt) => {
-            let fs = if opt.magic_number_end.is_none() || opt.magic_number_end.is_none() {
+            let fs = if opt.magic_number_start.is_none() || opt.magic_number_end.is_none() {
+                if opt.magic_number_start.is_some() || opt.magic_number_end.is_some() {
+                    println!("WARN: magic_number_start and magic_number_end need to be provided at the same time, magic_number will be ignored");
+                }
                 frfs::load(&opt.src)?
             } else {
                 frfs::load_with_header(
