@@ -54,8 +54,9 @@ use bincode::Options;
 use serde::{Deserialize, Serialize};
 
 // 文件开头和结尾的 Magic Number, 用于检查文件完整性
-const MAGIC_NUMBER_START: &[u8; 7] = b"FRFSv02";
-const MAGIC_NUMBER_END: &[u8; 7] = b"FRFSEnd";
+type MagicNumber = &'static [u8; 7];
+const MAGIC_NUMBER_START: MagicNumber = b"FRFSv02";
+const MAGIC_NUMBER_END: MagicNumber = b"FRFSEnd";
 const U64_LEN: usize = std::mem::size_of::<u64>();
 
 /// Internal error type
@@ -394,33 +395,59 @@ impl FRFS {
         Self::from_std_file(fs::File::open(p)?)
     }
 
+    pub fn new_with_header(
+        p: impl AsRef<Path>,
+        magic_number_start: MagicNumber,
+        magic_number_end: MagicNumber,
+    ) -> Result<Self> {
+        Self::from_std_file_with_header(fs::File::open(p)?, magic_number_start, magic_number_end)
+    }
+
     /// Read FRFS from File.
     pub fn from_std_file(file: fs::File) -> Result<Self> {
         Self::from_file(file.into())
     }
 
+    /// Read FRFS from File with header.
+    pub fn from_std_file_with_header(
+        file: fs::File,
+        magic_number_start: MagicNumber,
+        magic_number_end: MagicNumber,
+    ) -> Result<Self> {
+        Self::from_file_with_header(file.into(), magic_number_start, magic_number_end)
+    }
+
     /// Load a FRFS file.
-    pub fn from_file(mut base: File) -> Result<Self> {
+    pub fn from_file(base: File) -> Result<Self> {
+        Self::from_file_with_header(base, MAGIC_NUMBER_START, MAGIC_NUMBER_END)
+    }
+
+    /// Load a FRFS file with header.
+    pub fn from_file_with_header(
+        mut base: File,
+        magic_number_start: MagicNumber,
+        magic_number_end: MagicNumber,
+    ) -> Result<Self> {
         let mut magic_number_start_data = [0; MAGIC_NUMBER_START.len()];
         let mut header_length_data = [0; U64_LEN];
         let mut header_data = Vec::new();
         let mut data_length_data = [0; U64_LEN]; // 即创建文件时的 target_length 的 be_bytes 形式
         let mut magic_number_end_data = [0; MAGIC_NUMBER_END.len()];
-        base.seek(SeekFrom::End(-(MAGIC_NUMBER_END.len() as i64)))?;
-        // 此时指针指向 MAGIC_NUMBER_END 之前
+        base.seek(SeekFrom::End(-(magic_number_end.len() as i64)))?;
+        // 此时指针指向 magic_number_end 之前
         base.read_exact(&mut magic_number_end_data)?;
-        if &magic_number_end_data != MAGIC_NUMBER_END {
+        if &magic_number_end_data != magic_number_end {
             return Err(Error::IllegalData.into());
         }
-        base.seek(SeekFrom::End(-((MAGIC_NUMBER_END.len() + U64_LEN) as i64)))?;
+        base.seek(SeekFrom::End(-((magic_number_end.len() + U64_LEN) as i64)))?;
         // 此时指针指向 data_length 之前
         base.read_exact(&mut data_length_data)?;
         base.seek(SeekFrom::End(
             -(u64::from_be_bytes(data_length_data) as i64),
         ))?;
-        // 此时指针指向 MAGIC_NUMBER_START
+        // 此时指针指向 magic_number_start
         base.read_exact(&mut magic_number_start_data)?;
-        if &magic_number_start_data != MAGIC_NUMBER_START {
+        if &magic_number_start_data != magic_number_start {
             return Err(Error::IllegalData.into());
         }
         base.read_exact(&mut header_length_data)?;
@@ -575,11 +602,22 @@ impl FRFS {
 pub struct FRFSBuilder {
     header: FRFSHeader,
     source: PathBuf,
+    magic_number_start: MagicNumber,
+    magic_number_end: MagicNumber,
 }
 
 impl FRFSBuilder {
     // 从文件夹构造 FRFS 结构体，要求路径存在且为文件夹，有权限读取
     pub fn from_dir(source: impl AsRef<Path>) -> Result<Self> {
+        Self::from_dir_with_header(source, MAGIC_NUMBER_START, MAGIC_NUMBER_END)
+    }
+
+    // 从文件夹构造 FRFS 结构体，要求路径存在且为文件夹，有权限读取
+    pub fn from_dir_with_header(
+        source: impl AsRef<Path>,
+        magic_number_start: MagicNumber,
+        magic_number_end: MagicNumber,
+    ) -> Result<Self> {
         let source = source.as_ref();
         let mut dir = Dir {
             files: HashMap::new(),
@@ -593,6 +631,8 @@ impl FRFSBuilder {
                 start_at: 0,
             },
             source: source.to_path_buf(),
+            magic_number_start,
+            magic_number_end,
         })
     }
 
@@ -645,7 +685,7 @@ impl FRFSBuilder {
         // 构建 EmbedFS
         let mut target: Vec<u8> = Vec::new();
         // 写入 Magic Number
-        target.extend(MAGIC_NUMBER_START);
+        target.extend(self.magic_number_start);
         // 写入文件头长度
         target.extend((header.len() as u64).to_be_bytes());
         // 写入 bincode 编码的文件头
@@ -656,10 +696,10 @@ impl FRFSBuilder {
         let target_length = target.len();
         // U64_LEN 是 target_length 的长度
         let target_length = target_length + U64_LEN;
-        let target_length = target_length + MAGIC_NUMBER_END.len();
+        let target_length = target_length + self.magic_number_end.len();
         target.extend((target_length as u64).to_be_bytes());
         // 写入文件尾
-        target.extend(MAGIC_NUMBER_END);
+        target.extend(self.magic_number_end);
 
         Ok(target)
     }
@@ -743,14 +783,46 @@ pub fn load(path: impl AsRef<Path>) -> Result<FRFS> {
     FRFS::new(path)
 }
 
+/// Load a FRFS file with header.
+pub fn load_with_header(
+    path: impl AsRef<Path>,
+    magic_number_start: MagicNumber,
+    magic_number_end: MagicNumber,
+) -> Result<FRFS> {
+    FRFS::new_with_header(path, magic_number_start, magic_number_end)
+}
+
 /// Load a FRFS file from frfs::File.
 pub fn load_from_file(file: File) -> Result<FRFS> {
     FRFS::from_file(file)
 }
 
+/// Load a FRFS file from frfs::File with header.
+pub fn load_from_file_with_header(
+    file: File,
+    magic_number_start: MagicNumber,
+    magic_number_end: MagicNumber,
+) -> Result<FRFS> {
+    FRFS::from_file_with_header(file, magic_number_start, magic_number_end)
+}
+
 /// Pack a folder into a FRFS file.
 pub fn pack(source: impl AsRef<Path>, target: impl AsRef<Path>) -> Result<()> {
     fs::write(target, FRFSBuilder::from_dir(source)?.build()?)?;
+    Ok(())
+}
+
+/// Pack a folder into a FRFS file with header.
+pub fn pack_with_header(
+    source: impl AsRef<Path>,
+    target: impl AsRef<Path>,
+    magic_number_start: MagicNumber,
+    magic_number_end: MagicNumber,
+) -> Result<()> {
+    fs::write(
+        target,
+        FRFSBuilder::from_dir_with_header(source, magic_number_start, magic_number_end)?.build()?,
+    )?;
     Ok(())
 }
 
