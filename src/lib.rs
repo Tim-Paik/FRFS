@@ -719,7 +719,7 @@ fn str_to_path(path: &str) -> PathBuf {
 
 #[cfg(feature = "vfs")]
 impl vfs::filesystem::FileSystem for FRFS {
-    fn read_dir(&self, path: &str) -> vfs::VfsResult<Box<dyn Iterator<Item = String>>> {
+    fn read_dir(&self, path: &str) -> vfs::VfsResult<Box<dyn Iterator<Item = String> + Send>> {
         let path = str_to_path(path);
         let dir = Self::open_dir(&self.header.root, path.iter())?;
         let keys: Vec<String> = dir
@@ -735,15 +735,15 @@ impl vfs::filesystem::FileSystem for FRFS {
         Err(vfs::error::VfsErrorKind::NotSupported.into())
     }
 
-    fn open_file(&self, path: &str) -> vfs::VfsResult<Box<dyn vfs::SeekAndRead>> {
+    fn open_file(&self, path: &str) -> vfs::VfsResult<Box<dyn vfs::SeekAndRead + Send>> {
         Ok(Box::new(self.open(path)?))
     }
 
-    fn create_file(&self, _path: &str) -> vfs::VfsResult<Box<dyn io::Write>> {
+    fn create_file(&self, _path: &str) -> vfs::VfsResult<Box<dyn io::Write + Send>> {
         Err(vfs::error::VfsErrorKind::NotSupported.into())
     }
 
-    fn append_file(&self, _path: &str) -> vfs::VfsResult<Box<dyn io::Write>> {
+    fn append_file(&self, _path: &str) -> vfs::VfsResult<Box<dyn io::Write + Send>> {
         Err(vfs::error::VfsErrorKind::NotSupported.into())
     }
 
